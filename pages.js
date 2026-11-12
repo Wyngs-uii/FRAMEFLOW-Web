@@ -17,8 +17,8 @@
       sync.title = '数据只保存在当前浏览器，请通过导出项目备份';
     }
     const root = document.getElementById('root');
-    root.insertAdjacentHTML('afterbegin', '<div class="panel" style="margin-bottom:18px"><h2>需要真实采集？</h2><p class="small muted">云端工作台已接通公开抖音话题榜单和网页素材采集，使用飞书账号登录。</p><a class="btn primary" href="https://shengshu.feishuapp.com/app/app_17hxdqcee1y" target="_blank" rel="noopener noreferrer">进入真实采集版 FRAMEFLOW →</a></div>');
-    root.insertAdjacentHTML('afterbegin', '<div class="model-note" style="margin-bottom:22px"><b>FRAMEFLOW · 公开演示版</b><br>灵感、素材、剧本和分镜自动保存在当前浏览器。可导出 JSON 备份；AI 与实时采集尚未在此版本启用。</div>');
+    root.insertAdjacentHTML('afterbegin', '<div class="panel" style="margin-bottom:18px"><h2>使用电脑上的完整版本</h2><p class="small muted">先双击电脑项目文件夹里的“启动_FRAMEFLOW.command”，再打开下方入口。本机版支持实际采集和 AI 扩写，无需妙搭或飞书登录。</p><a class="btn primary" href="http://127.0.0.1:8765" target="_blank" rel="noopener noreferrer">打开本机 FRAMEFLOW →</a></div>');
+    root.insertAdjacentHTML('afterbegin', '<div class="model-note" style="margin-bottom:22px"><b>FRAMEFLOW · 前端演示版：需自行补全剧情</b><br>可阅读两份完整人工示例，或填写空白模板。AI 扩写和实时采集请使用本机版。数据保存在当前浏览器，可导出 JSON 备份。</div>');
     for (const button of document.querySelectorAll(disabledSelector)) {
       button.disabled = true;
       button.title = unavailable;

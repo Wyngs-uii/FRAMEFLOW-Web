@@ -87,14 +87,16 @@
     }catch(e){if(pending?.id===expectedId)jobError=e.status===404?'未查到该任务，请检查服务后再次确认；不会自动重发。':'暂时无法读取任务：'+e.message+'。恢复连接后点击检查任务状态。'}
     finally{checking=false;refreshJobPanel()}
   }
-  async function startJob(kind,duration){
-    const idea=currentIdea(),trend=currentTrend(),requestId=crypto.randomUUID().replaceAll('-','');
+  async function startJob(kind,duration,direction=null){
+    const idea=currentIdea(),context=gather(kind),requestId=crypto.randomUUID().replaceAll('-','');
+    if(direction)context.trend=sourceTrend();
+    const trend=context.trend;
     const entry={id:'generation_'+requestId,ideaId:idea.id,trendId:trend?.id||null,kind,
-      snapshot:{title:idea.title,content:idea.content,mustKeep:idea.mustKeep||''}};
+      snapshot:{title:idea.title,content:idea.content,mustKeep:idea.mustKeep||''},direction};
     job=null;jobError='';runtime.resultError='';
     try{
       rememberJob(entry);render();
-      const out=await api('/api/creative/jobs',{...gather(),kind,provider:'llm',duration,requestId},'POST',10000);
+      const out=await api('/api/creative/jobs',{...context,kind,provider:'llm',duration,requestId,direction},'POST',10000);
       rememberJob({...entry,id:out.job.id});job=out.job;
       if(job.status==='queued'||job.status==='running')pollTimer=setTimeout(checkJob,1000);
     }catch(e){
@@ -142,7 +144,7 @@
     v=v.replace("含 6 条演示主题", "示例与自有数据练习");
     const real=state.externalTrends.filter(isReal);
     const status=runtime.health?.aiConfigured?'AI 编剧已接入':'AI 未启用 · 演示版';
-    const ribbon=`<div class="v02-banner"><span class="v02-kicker">FRAMEFLOW · V0.3.1 / CONTENT INTELLIGENCE</span><h2>创作前，先找到值得讲的故事。</h2><p class="v02-caption">写下自己的灵感，或使用示例与自有素材。通过规则模板组织剧情，再编辑剧本、分镜与时间线。</p><div class="v02-status-row"><span class="v02-pill">原创灵感 ${state.ideas.length} 条</span><span class="v02-pill">已采集热点 ${real.length} 条</span><span class="v02-pill ${runtime.health?.aiConfigured?'':'warn'}">${status}</span></div><div class="row wrap"><button class="btn primary" data-nav="ideas">＋ 写下我的灵感</button><button class="btn" data-nav="trends">↗ 浏览主题示例</button></div></div>`;
+    const ribbon=`<div class="v02-banner"><span class="v02-kicker">FRAMEFLOW · V0.4.1 / CONTENT INTELLIGENCE</span><h2>创作前，先找到值得讲的故事。</h2><p class="v02-caption">写下自己的灵感，或使用示例与自有素材。通过规则模板组织剧情，再编辑剧本、分镜与时间线。</p><div class="v02-status-row"><span class="v02-pill">原创灵感 ${state.ideas.length} 条</span><span class="v02-pill">已采集热点 ${real.length} 条</span><span class="v02-pill ${runtime.health?.aiConfigured?'':'warn'}">${status}</span></div><div class="row wrap"><button class="btn primary" data-nav="ideas">＋ 写下我的灵感</button><button class="btn" data-nav="trends">↗ 浏览主题示例</button></div></div>`;
     return ribbon+v;
   };
 
@@ -204,24 +206,27 @@
     const meta=state.v02.variantMeta?.[cacheKey];
     const vcard=variants.map((v,i)=>`<div class="v02-result"><span class="v02-ai-tag">OPTION ${String(i+1).padStart(2,'0')}</span><h3>${h(v.title)}</h3>
       <p><b>开头：</b>${h(v.hook)}</p><p><b>剧情：</b>${h(v.outline)}</p><p><b>结局：</b>${h(v.ending)}</p>${constraintInfo(v.constraintChecks)}
-      <button class="btn primary small" data-v02="adopt-ai-variant" data-index="${i}">采用这个方向 →</button></div>`).join('');
+      <button class="btn primary small" data-v02="adopt-ai-variant" data-index="${i}" ${blocked()?'disabled':''}>${meta?.provider==='llm'?'AI 扩写这个方向 →':'用这个方向填写空白模板 →'}</button></div>`).join('');
     const top=`<div class="v02-panel"><div class="panel-title"><h2>AI 创意策划</h2><span class="tag">${h(meta?.provider==='llm'?'模型真实生成':meta?.provider==='local'?'本地规则草案':'等待生成')}</span></div>
       <p class="small muted">系统将你选中的灵感、热点以及最近的参考素材放到同一份上下文中。用户“必须保留”的设定作为硬约束传给编剧。</p>
-      <div class="row wrap"><button class="btn primary" data-v02="generate-variants" data-provider="llm" ${blocked()?'disabled':''}>✦ 使用 AI 生成三个原创方向</button><button class="btn" data-v02="generate-variants" data-provider="local" ${blocked()?'disabled':''}>本地结构试算</button></div>${modelInfo(meta?.metadata)}
+      <div class="row wrap"><button class="btn primary" data-v02="generate-variants" data-provider="llm" ${blocked()?'disabled':''}>✦ 使用 AI 生成三个原创方向</button><button class="btn" data-v02="generate-variants" data-provider="local" ${blocked()?'disabled':''}>查看规则思路（非 AI）</button><label>扩写时长（秒） <input id="v02-script-duration" class="input" style="width:90px" type="number" min="20" max="180" value="${Number(state.v02.duration)||60}"></label></div>${modelInfo(meta?.metadata)}
       ${runtime.resultError&&state.view==='lab'?textBlock(runtime.resultError):''}
-      ${variants.length?`<div class="spacer"></div>${vcard}`:`<p class="v02-caption" style="margin-top:14px">大模型未配置时不会假装调用成功，仍可使用下方 V0.1 的离线模板。</p>`}
+      ${variants.length?`<div class="spacer"></div>${vcard}`:`<p class="v02-caption" style="margin-top:14px">AI 会写出三种具体剧情；规则思路只有固定句式，需要自行创作。也可直接去剧本工坊扩写，不必先碰撞。</p>`}
     </div>`;
-    return old.renderLab().replace('<div class="layout-37">',top+'<div class="layout-37">');
+    return `${pageHeader('创意碰撞','可选步骤：先探索三个故事方向，再把选中的方向扩写成剧本。')}
+      <div class="panel" style="margin-bottom:18px"><div class="grid grid2"><div class="field"><label>原创灵感</label><select class="select" id="lab-idea">${ideaOptions(state.currentIdea)}</select></div><div class="field"><label>热点（可选）</label><select class="select" id="lab-trend">${trendOptions(state.currentTrend)}</select></div></div><p>${h(idea.content)}</p><p class="small muted">必须保留：${h(idea.mustKeep||'未指定')}</p></div>${top}`;
   };
 
   renderScript = function(){
     const idea=currentIdea(),d=currentDraft();
-    const source=d?.origin==='llm'?'真实 AI 生成':d?.origin==='local_outline'?'本地结构草案':d?'离线模板 / 手动编辑':'待生成';
+    const source=d?.origin==='llm'?'真实 AI 生成':d?.origin==='written_example'?'人工编写完整示例':d?.origin==='local_outline'?'空白模板 · 需自行填写':d?'模板 / 手动编辑':'待生成';
     const form=`<div class="v02-panel"><div class="panel-title"><h2>结构化 AI 编剧</h2><span class="tag ${d?.origin==='llm'?'lime':''}">${source}</span></div>
       <div class="row between wrap"><p class="small muted">从当前原创灵感、选中热点及素材中生成详细剧情节点，逐节点可编辑并进入分镜。</p></div>
       <div class="row wrap" style="align-items:end"><div class="field" style="min-width:155px;margin-bottom:0"><label>目标时长（秒）</label><input id="v02-script-duration" class="input" type="number" min="20" max="180" value="${Number(state.v02.duration)||60}"></div>
-      <button class="btn primary" data-v02="generate-script" data-provider="llm" ${blocked()?'disabled':''}>✦ AI 生成剧本</button><button class="btn" data-v02="generate-script" data-provider="local" ${blocked()?'disabled':''}>本地生成基础结构</button></div>
-      <div class="spacer"></div><p class="v02-caption">已有剧本会先保存历史版本。覆盖分镜前需要确认。公开演示版未启用 AI，浏览器规则模板仍可使用。</p>
+      <button class="btn primary" data-v02="generate-script" data-provider="llm" ${blocked()?'disabled':''}>✦ AI 扩写完整剧本</button><button class="btn" data-v02="generate-script" data-provider="local" ${blocked()?'disabled':''}>填写空白模板（非 AI）</button></div>
+      <p class="small muted">AI 扩写：具体情节、角色台词与分镜动作。空白模板：只提供栏目和时间分配，需要自行写剧情与台词。</p>
+      <label class="small"><input id="v02-use-trend" type="checkbox" ${state.v02.useTrend?'checked':''}> 加入已选热点（可选）：${h(sourceTrend()?.title||'未选真实热点')}</label>
+      <div class="spacer"></div><p class="v02-caption">AI 结果先预览，保存后才替换当前剧本并保留旧版本。无需先做创意碰撞。未配置模型时会显示实际错误。</p>
       ${runtime.resultError&&state.view==='script'?textBlock(runtime.resultError):''}
       ${d?.origin?`<div class="v02-script-status"><div><b>当前剧本：</b>${h(d.title)}<span class="muted"> · ${d.beats.length} 个节点 · ${d.beats.reduce((n,b)=>n+Number(b.duration||0),0)} 秒</span></div><span class="tag lime">${source}</span></div>`:''}
       ${modelInfo(d?.generationMetadata)}${constraintInfo(d?.constraintChecks)}
@@ -248,8 +253,8 @@
     return top+old.renderConnectors();
   };
 
-  function gather(){
-    const idea=currentIdea(),trend=sourceTrend();
+  function gather(kind='variants'){
+    const idea=currentIdea(),trend=kind==='script'&&!state.v02.useTrend?null:sourceTrend();
     return {idea:{title:idea?.title,content:idea?.content,mustKeep:idea?.mustKeep,tags:idea?.tags},
             trend:trend?{...trend}:null,
             materials:state.sources.slice(-7).filter(x=>x.body||x.note).map(x=>({title:x.title,content:x.body||'',note:x.note||'',url:x.url||''}))};
@@ -333,6 +338,7 @@
     state.drafts[x.id]={title:d.title||x.title,logline:d.logline||x.content,hook:d.hook||'',
       keep:d.keep??x.mustKeep??'',beats,createdAt:Date.now(),origin:provider,linkedTrend:trendId,
       generationMetadata:metadata,constraintChecks:d.constraintChecks||[]};
+    window.frameflowArchiveShots?.();
     state.project={title:d.title||x.title,ideaId:x.id,sourceTrendId:trendId};
     state.currentIdea=x.id;
     state.shots=[];state.selectedShot=null;
@@ -346,6 +352,7 @@
     if(!Number.isInteger(sec)||sec<20||sec>180){toast('目标时长需为 20–180 秒整数');return}
     state.v02.duration=sec;save();
     if(provider==='llm'){await startJob('script',sec);return}
+    if(window.frameflowEmptyDraft){await applyDraft(window.frameflowEmptyDraft(x,sec),'local_outline',x.id,sourceTrend()?.id||null);return}
     const trendId=sourceTrend()?.id||null;
     runtime.busy=true;runtime.resultError='';render();
     try{
@@ -358,9 +365,16 @@
     }finally{runtime.busy=false;render()}
   }
   async function adoptVariant(i){
+    if(blocked())return;
     const x=currentIdea(),trend=currentTrend(),key=[x?.id,trend?.id||'none'].join(':');
     const v=state.v02.variants?.[key]?.[i];if(!v)return;
-    const d=makeDraft(x,v,trend);
+    const seconds=Number(document.getElementById('v02-script-duration')?.value||state.v02.duration||60);
+    if(!Number.isInteger(seconds)||seconds<20||seconds>180){toast('目标时长需为 20–180 秒整数');return}
+    state.v02.duration=seconds;save();
+    if(state.v02.variantMeta?.[key]?.provider==='llm'){
+      navigate('script');await startJob('script',seconds,v);return;
+    }
+    const d=window.frameflowEmptyDraft?window.frameflowEmptyDraft(x,seconds,v):makeDraft(x,v,trend);
     await applyDraft(d,'local_outline');
   }
 
@@ -368,12 +382,14 @@
   document.addEventListener('click',async event=>{
     if(event.target.closest('[data-action="to-shots"]')){
       event.preventDefault();event.stopImmediatePropagation();
-      const draft=currentDraft()||ensureDraft();if(!draft){toast('请先创建灵感');return}
+      const draft=currentDraft();if(!draft){toast('请先 AI 扩写剧本、载入完整示例，或填写空白模板。');return}
       if(state.shots.length&&!await confirmAction('重新拆镜会替换当前分镜。建议先导出项目。'))return;
+      window.frameflowArchiveShots?.();
       state.shots=draft.beats.flatMap((beat,i)=>{
-        const splits=Number(beat.duration)>=12?2:1;
+        const splits=Array.isArray(beat.shots)&&beat.shots.length?beat.shots.length:1;
         return Array.from({length:splits},(_,part)=>shotFromBeat(beat,i,draft.keep,part,splits));
       });
+      state.project={title:draft.title,ideaId:state.currentIdea,sourceTrendId:draft.linkedTrend||null};
       state.selectedShot=state.shots[0]?.id||null;save();navigate('shots');toast(`已生成 ${state.shots.length} 个可编辑镜头`);return;
     }
     const target=event.target.closest('[data-v02]');if(!target)return;
@@ -399,6 +415,7 @@
     const target=event.target;
     if(target?.id==='v02-source'){state.v02.selectedProvider=target.value;save()}
     if(target?.id==='v02-script-duration'){state.v02.duration=Number(target.value)||60;save()}
+    if(target?.id==='v02-use-trend'){state.v02.useTrend=target.checked;save()}
   },true);
 
   // Restore the currently open view and asynchronously rehydrate DB-backed trends.
