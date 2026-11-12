@@ -1,7 +1,7 @@
 /* FRAMEFLOW 0.2 extension: preserves V0.1 project JSON and localStorage data. */
 (() => {
   const defaults = {trendTab:'real', duration:60, selectedProvider:'public_mirror',
-    variants:{}, variantMeta:{}, analysis:{}, draftHistory:{}, status:'', lastFetch:null};
+    variants:{}, variantMeta:{}, analysis:{}, draftHistory:{}, materialSelection:{}, status:'', lastFetch:null};
   state.v02 = Object.assign({}, defaults, state.v02 || {});
   const old = {
     renderOverview,renderTrends,renderLibrary,renderLab,renderScript,renderConnectors,
@@ -9,12 +9,21 @@
   };
   let runtime = {health:null, busy:false, resultError:'', trendLoading:false};
   const JOB_KEY = KEY + '.generation';
-  let pending = null, job = null, jobError = '', pollTimer = null, checking = false;
+  let pending = null, job = null, jobError = '', pollTimer = null, checking = false, applying = false, draftWriting = false;
   pending = null;
   if (!pending || typeof pending.id !== 'string' || !pending.snapshot) pending = null;
   const baseRender = render;
   render = function(){baseRender();document.getElementById('root').insertAdjacentHTML('afterbegin',jobPanel())};
-  const blocked = () => runtime.busy || Boolean(pending);
+  const blocked = () => runtime.busy || Boolean(pending) || draftWriting;
+  const ideaSignature = idea => JSON.stringify([idea?.title||'',idea?.content||'',idea?.mustKeep||'']);
+  function selectedMaterials() {
+    const idea=currentIdea(),ids=state.v02.materialSelection?.[idea?.id]||idea?.refs||[];
+    return state.sources.filter(source=>ids.includes(source.id)&&(source.body||source.note)).slice(0,7);
+  }
+  function materialPicker() {
+    const sources=state.sources.filter(source=>source.body||source.note),selected=selectedMaterials();
+    return `<details class="v02-constraints"><summary data-material-count>参考素材（可选）· 已选择 ${selected.length} 条</summary><p class="small muted">只加入你勾选的文字素材，最多 7 条；其他故事的素材不会自动带入。</p>${sources.length?sources.map(source=>`<label class="material-choice"><input type="checkbox" data-material-id="${h(source.id)}" ${selected.some(x=>x.id===source.id)?'checked':''}> ${h(source.title||source.name||'未命名素材')}</label>`).join(''):'<p class="small muted">暂无文字素材，可先到素材库添加。</p>'}</details>`;
+  }
   const fmtTime = val => {
     if(!val) return '未知时间';
     const d=new Date(val); return isNaN(d.getTime())?'未知时间':d.toLocaleString('zh-CN',{month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'});
@@ -92,7 +101,8 @@
     if(direction)context.trend=sourceTrend();
     const trend=context.trend;
     const entry={id:'generation_'+requestId,ideaId:idea.id,trendId:trend?.id||null,kind,
-      snapshot:{title:idea.title,content:idea.content,mustKeep:idea.mustKeep||''},direction};
+      snapshot:{title:idea.title,content:idea.content,mustKeep:idea.mustKeep||''},
+      draftBefore:JSON.stringify(state.drafts[idea.id]||null),direction};
     job=null;jobError='';runtime.resultError='';
     try{
       rememberJob(entry);render();
@@ -117,8 +127,11 @@
       dialog.querySelector('[data-answer="yes"]').onclick=()=>finish(true);
     });
   }
+  window.frameflowConfirm=confirmAction;
   async function applyJob(){
-    if(!pending||job?.status!=='succeeded')return;
+    if(!pending||job?.status!=='succeeded'||applying)return;
+    applying=true;
+    try {
     const idea=state.ideas.find(x=>x.id===pending.ideaId);
     if(!idea){jobError='原灵感已删除，生成结果仍保留在任务中。';render();return}
     if(idea.title!==pending.snapshot.title||idea.content!==pending.snapshot.content||(idea.mustKeep||'')!==pending.snapshot.mustKeep){
@@ -127,11 +140,14 @@
     if(pending.kind==='variants'){
       const key=[idea.id,pending.trendId||'none'].join(':');
       state.v02.variants[key]=job.result;
-      state.v02.variantMeta[key]={provider:'llm',modelCalled:true,createdAt:job.updatedAt,metadata:job.metadata};
+      state.v02.variantMeta[key]={provider:'llm',modelCalled:true,createdAt:job.updatedAt,metadata:job.metadata,
+        ideaSignature:ideaSignature(idea)};
       state.currentIdea=idea.id;state.currentTrend=pending.trendId;save();rememberJob(null);job=null;navigate('lab');toast('三个原创方向已保存');
-    }else if(await applyDraft(job.result,'llm',idea.id,pending.trendId,job.metadata)){
+    }else if(await applyDraft(job.result,'llm',idea.id,pending.trendId,job.metadata,
+      pending.draftBefore!==undefined&&pending.draftBefore!==JSON.stringify(state.drafts[idea.id]||null))){
       rememberJob(null);job=null;render();
     }
+    } finally { applying=false; }
   }
   function actionSource(){
     return `<div class="v02-inline-toolbar"><button class="btn primary" data-v02="refresh-trends" ${runtime.busy?'disabled':''}>${runtime.trendLoading?'刷新中…':'↻ 采集抖音热榜'}</button><button class="btn" data-action="import-trends">导入热点 JSON</button><button class="btn" data-nav="connectors">采集设置 ↗</button></div>`;
@@ -144,7 +160,7 @@
     v=v.replace("含 6 条演示主题", "示例与自有数据练习");
     const real=state.externalTrends.filter(isReal);
     const status=runtime.health?.aiConfigured?'AI 编剧已接入':'AI 未启用 · 演示版';
-    const ribbon=`<div class="v02-banner"><span class="v02-kicker">FRAMEFLOW · V0.4.1 / CONTENT INTELLIGENCE</span><h2>创作前，先找到值得讲的故事。</h2><p class="v02-caption">写下自己的灵感，或使用示例与自有素材。通过规则模板组织剧情，再编辑剧本、分镜与时间线。</p><div class="v02-status-row"><span class="v02-pill">原创灵感 ${state.ideas.length} 条</span><span class="v02-pill">已采集热点 ${real.length} 条</span><span class="v02-pill ${runtime.health?.aiConfigured?'':'warn'}">${status}</span></div><div class="row wrap"><button class="btn primary" data-nav="ideas">＋ 写下我的灵感</button><button class="btn" data-nav="trends">↗ 浏览主题示例</button></div></div>`;
+    const ribbon=`<div class="v02-banner"><span class="v02-kicker">FRAMEFLOW · V0.4.2 / CONTENT INTELLIGENCE</span><h2>创作前，先找到值得讲的故事。</h2><p class="v02-caption">写下自己的灵感，或使用示例与自有素材。通过规则模板组织剧情，再编辑剧本、分镜与时间线。</p><div class="v02-status-row"><span class="v02-pill">原创灵感 ${state.ideas.length} 条</span><span class="v02-pill">已采集热点 ${real.length} 条</span><span class="v02-pill ${runtime.health?.aiConfigured?'':'warn'}">${status}</span></div><div class="row wrap"><button class="btn primary" data-nav="ideas">＋ 写下我的灵感</button><button class="btn" data-nav="trends">↗ 浏览主题示例</button></div></div>`;
     return ribbon+v;
   };
 
@@ -204,13 +220,15 @@
     const trend=currentTrend(), cacheKey = [idea.id,trend?.id||'none'].join(':');
     const variants=state.v02.variants?.[cacheKey]||[];
     const meta=state.v02.variantMeta?.[cacheKey];
+    const stale=Boolean(meta?.ideaSignature&&meta.ideaSignature!==ideaSignature(idea));
     const vcard=variants.map((v,i)=>`<div class="v02-result"><span class="v02-ai-tag">OPTION ${String(i+1).padStart(2,'0')}</span><h3>${h(v.title)}</h3>
-      <p><b>开头：</b>${h(v.hook)}</p><p><b>剧情：</b>${h(v.outline)}</p><p><b>结局：</b>${h(v.ending)}</p>${constraintInfo(v.constraintChecks)}
-      <button class="btn primary small" data-v02="adopt-ai-variant" data-index="${i}" ${blocked()?'disabled':''}>${meta?.provider==='llm'?'AI 扩写这个方向 →':'用这个方向填写空白模板 →'}</button></div>`).join('');
+      ${[['title','方向标题',180],['hook','开头',1500],['outline','剧情走向',6000],['ending','结局',2000]].map(([field,label,max])=>`<div class="field"><label>${label}</label><textarea class="textarea" rows="${field==='outline'?4:2}" maxlength="${max}" data-variant-key="${h(cacheKey)}" data-variant-index="${i}" data-variant-field="${field}">${h(v[field])}</textarea></div>`).join('')}${constraintInfo(v.constraintChecks)}
+      <button class="btn primary small" data-v02="adopt-ai-variant" data-index="${i}" ${blocked()||stale?'disabled':''}>${meta?.provider==='llm'?'AI 扩写这个方向 →':'用这个方向填写空白模板 →'}</button></div>`).join('');
     const top=`<div class="v02-panel"><div class="panel-title"><h2>AI 创意策划</h2><span class="tag">${h(meta?.provider==='llm'?'模型真实生成':meta?.provider==='local'?'本地规则草案':'等待生成')}</span></div>
-      <p class="small muted">系统将你选中的灵感、热点以及最近的参考素材放到同一份上下文中。用户“必须保留”的设定作为硬约束传给编剧。</p>
+      <p class="small muted">只使用当前灵感、所选热点和勾选的素材。三个方向可以先改开头、情节与结局，再交给 AI 扩写。修改自动保存。</p>${materialPicker()}
       <div class="row wrap"><button class="btn primary" data-v02="generate-variants" data-provider="llm" ${blocked()?'disabled':''}>✦ 使用 AI 生成三个原创方向</button><button class="btn" data-v02="generate-variants" data-provider="local" ${blocked()?'disabled':''}>查看规则思路（非 AI）</button><label>扩写时长（秒） <input id="v02-script-duration" class="input" style="width:90px" type="number" min="20" max="180" value="${Number(state.v02.duration)||60}"></label></div>${modelInfo(meta?.metadata)}
       ${runtime.resultError&&state.view==='lab'?textBlock(runtime.resultError):''}
+      ${stale?textBlock('原灵感或固定设定已修改，这些方向来自旧输入。请重新生成三个方向，旧内容仍保留供参考。'):''}
       ${variants.length?`<div class="spacer"></div>${vcard}`:`<p class="v02-caption" style="margin-top:14px">AI 会写出三种具体剧情；规则思路只有固定句式，需要自行创作。也可直接去剧本工坊扩写，不必先碰撞。</p>`}
     </div>`;
     return `${pageHeader('创意碰撞','可选步骤：先探索三个故事方向，再把选中的方向扩写成剧本。')}
@@ -226,6 +244,7 @@
       <button class="btn primary" data-v02="generate-script" data-provider="llm" ${blocked()?'disabled':''}>✦ AI 扩写完整剧本</button><button class="btn" data-v02="generate-script" data-provider="local" ${blocked()?'disabled':''}>填写空白模板（非 AI）</button></div>
       <p class="small muted">AI 扩写：具体情节、角色台词与分镜动作。空白模板：只提供栏目和时间分配，需要自行写剧情与台词。</p>
       <label class="small"><input id="v02-use-trend" type="checkbox" ${state.v02.useTrend?'checked':''}> 加入已选热点（可选）：${h(sourceTrend()?.title||'未选真实热点')}</label>
+      ${materialPicker()}
       <div class="spacer"></div><p class="v02-caption">AI 结果先预览，保存后才替换当前剧本并保留旧版本。无需先做创意碰撞。未配置模型时会显示实际错误。</p>
       ${runtime.resultError&&state.view==='script'?textBlock(runtime.resultError):''}
       ${d?.origin?`<div class="v02-script-status"><div><b>当前剧本：</b>${h(d.title)}<span class="muted"> · ${d.beats.length} 个节点 · ${d.beats.reduce((n,b)=>n+Number(b.duration||0),0)} 秒</span></div><span class="tag lime">${source}</span></div>`:''}
@@ -257,7 +276,7 @@
     const idea=currentIdea(),trend=kind==='script'&&!state.v02.useTrend?null:sourceTrend();
     return {idea:{title:idea?.title,content:idea?.content,mustKeep:idea?.mustKeep,tags:idea?.tags},
             trend:trend?{...trend}:null,
-            materials:state.sources.slice(-7).filter(x=>x.body||x.note).map(x=>({title:x.title,content:x.body||'',note:x.note||'',url:x.url||''}))};
+            materials:selectedMaterials().map(x=>({title:x.title,content:x.body||'',note:x.note||'',url:x.url||''}))};
   }
   async function refreshHealth(){
     try{runtime.health=await api('/api/health',undefined,'GET',4000);const el=document.getElementById('api-status');if(el){el.textContent=runtime.health.aiConfigured?'V'+runtime.health.version+' 在线 · AI 已接入':'V'+runtime.health.version+' 在线 · AI 待配置';document.getElementById('api-dot')?.classList.add('green')}}
@@ -274,7 +293,8 @@
     const next=[...clean,...existing];
     if(JSON.stringify(next)===JSON.stringify(state.externalTrends)&&!navigateTo)return;
     state.externalTrends=next;
-    if(clean.length){state.currentTrend=clean[0].id;state.v02.lastFetch=Date.now()}
+    if(state.currentTrend&&!next.some(x=>x.id===state.currentTrend)&&!demoTrends.some(x=>x.id===state.currentTrend))state.currentTrend=null;
+    if(clean.length)state.v02.lastFetch=Date.now();
     save();if(navigateTo){state.v02.trendTab='real';navigate('trends')}else if(state.view==='trends'||state.view==='overview')render();
   }
   async function refreshTrends(){
@@ -314,22 +334,32 @@
       const out=await api('/api/creative/generate',{...gather(),kind:'variants',provider,duration:state.v02.duration});
       const key=[idea.id,trendId||'none'].join(':');
       state.v02.variants[key]=out.result;
-      state.v02.variantMeta[key]={provider:out.provider,createdAt:out.createdAt,modelCalled:out.modelCalled};
+      state.v02.variantMeta[key]={provider:out.provider,createdAt:out.createdAt,modelCalled:out.modelCalled,ideaSignature:ideaSignature(idea)};
       save();render();toast(out.modelCalled?'AI 已生成原创创意候选':'已生成本地结构化创意草案');
     }catch(e){
       if(provider==='local'){
         const key=[idea.id,trendId||'none'].join(':');
         state.v02.variants[key]=constructVariants(idea,null,state.collisionMode);
-        state.v02.variantMeta[key]={provider:'local',modelCalled:false};save();render();toast('已使用浏览器规则模板（非 AI 生成）')
+        state.v02.variantMeta[key]={provider:'local',modelCalled:false,ideaSignature:ideaSignature(idea)};save();render();toast('已使用浏览器规则模板（非 AI 生成）')
       }else{runtime.resultError=e.message;render();toast('AI 生成失败，未用模板冒充模型输出')}
     }finally{runtime.busy=false;render()}
   }
-  async function applyDraft(d,provider,ideaId=currentIdea()?.id,trendId=sourceTrend()?.id||null,metadata=null){
+  async function applyDraft(d,provider,ideaId=currentIdea()?.id,trendId=sourceTrend()?.id||null,metadata=null,editedDuringGeneration=false){
+    if(draftWriting)return false;
+    draftWriting=true;
+    try {
     const x=state.ideas.find(x=>x.id===ideaId);if(!x)return false;
     const before=state.drafts[x.id];
+    const expected=JSON.stringify(before||null),inputSignature=ideaSignature(x);
     if(before){
-      const answer=await confirmAction(`已有「${before.title}」剧本。将保存历史版本，再覆盖当前剧本${state.shots.length?'并清空旧分镜':''}。`);
+      const answer=await confirmAction(`${editedDuringGeneration?'你在 AI 生成期间修改过当前剧本。':''}已有「${before.title}」剧本。确认后保存旧剧本和分镜备份，再采用新剧本。取消可继续保留当前编辑。`);
       if(!answer)return false;
+    }
+    if(!state.ideas.includes(x)||inputSignature!==ideaSignature(x)||expected!==JSON.stringify(state.drafts[x.id]||null)){
+      toast('确认期间内容又有修改，已保留最新编辑。请重新核对后保存。');return false;
+    }
+    if(window.frameflowArchiveShots?.()===false)return false;
+    if(before){
       state.v02.draftHistory[x.id]=state.v02.draftHistory[x.id]||[];
       state.v02.draftHistory[x.id].push({savedAt:Date.now(),draft:JSON.parse(JSON.stringify(before))});
       state.v02.draftHistory[x.id]=state.v02.draftHistory[x.id].slice(-12);
@@ -338,12 +368,12 @@
     state.drafts[x.id]={title:d.title||x.title,logline:d.logline||x.content,hook:d.hook||'',
       keep:d.keep??x.mustKeep??'',beats,createdAt:Date.now(),origin:provider,linkedTrend:trendId,
       generationMetadata:metadata,constraintChecks:d.constraintChecks||[]};
-    window.frameflowArchiveShots?.();
     state.project={title:d.title||x.title,ideaId:x.id,sourceTrendId:trendId};
     state.currentIdea=x.id;
     state.shots=[];state.selectedShot=null;
-    save();navigate('script');toast(provider==='llm'?'模型生成的剧本已保存，可继续修改分镜':'本地结构草案已创建，可直接编辑');
+    save();navigate('script');toast(provider==='llm'?'模型生成的剧本已保存，可继续修改剧本并拆分镜':'本地结构草案已创建，可直接编辑');
     return true;
+    } finally { draftWriting=false;render(); }
   }
   async function generateScript(provider){
     if(blocked())return;const x=currentIdea();if(!x){toast('先添加一条灵感');return}
@@ -368,6 +398,9 @@
     if(blocked())return;
     const x=currentIdea(),trend=currentTrend(),key=[x?.id,trend?.id||'none'].join(':');
     const v=state.v02.variants?.[key]?.[i];if(!v)return;
+    const meta=state.v02.variantMeta?.[key];
+    if(meta?.ideaSignature&&meta.ideaSignature!==ideaSignature(x)){toast('原灵感已修改，请重新生成方向后再扩写。');return}
+    if(['title','hook','outline','ending'].some(field=>typeof v[field]!=='string'||!v[field].trim())){toast('请补全方向的标题、开头、剧情和结局。');return}
     const seconds=Number(document.getElementById('v02-script-duration')?.value||state.v02.duration||60);
     if(!Number.isInteger(seconds)||seconds<20||seconds>180){toast('目标时长需为 20–180 秒整数');return}
     state.v02.duration=seconds;save();
@@ -380,17 +413,18 @@
 
   // Capture our new actions before the legacy handler, leaving old project interactions intact.
   document.addEventListener('click',async event=>{
-    if(event.target.closest('[data-action="to-shots"]')){
+    if(event.target.closest('[data-action="to-shots"], [data-action="rebuild-shots"]')){
       event.preventDefault();event.stopImmediatePropagation();
       const draft=currentDraft();if(!draft){toast('请先 AI 扩写剧本、载入完整示例，或填写空白模板。');return}
-      if(state.shots.length&&!await confirmAction('重新拆镜会替换当前分镜。建议先导出项目。'))return;
-      window.frameflowArchiveShots?.();
-      state.shots=draft.beats.flatMap((beat,i)=>{
-        const splits=Array.isArray(beat.shots)&&beat.shots.length?beat.shots.length:1;
-        return Array.from({length:splits},(_,part)=>shotFromBeat(beat,i,draft.keep,part,splits));
-      });
-      state.project={title:draft.title,ideaId:state.currentIdea,sourceTrendId:draft.linkedTrend||null};
-      state.selectedShot=state.shots[0]?.id||null;save();navigate('shots');toast(`已生成 ${state.shots.length} 个可编辑镜头`);return;
+      const ideaId=state.currentIdea,full=Boolean(event.target.closest('[data-action="rebuild-shots"]'));
+      const before=JSON.stringify([draft,state.shots,state.project]);
+      const plan=window.frameflowStoryboard.plan(draft,state.shots,state.project,ideaId,shotFromBeat,full);
+      if((plan.replacing||plan.removed||full)&&state.shots.length&&!await confirmAction(`${full?'重建分镜':'更新已修改的剧情节点'}，将更新 ${plan.changed} 个节点并移除 ${plan.removed} 个旧镜头。未变节点的手动编辑及锁定镜头保留，当前分镜将先备份。`))return;
+      if(state.currentIdea!==ideaId||before!==JSON.stringify([currentDraft(),state.shots,state.project])){toast('确认期间剧本或分镜有修改，请重新更新。');return}
+      if(window.frameflowArchiveShots?.()===false)return;
+      state.shots=plan.shots;
+      state.project={title:draft.title,ideaId,sourceTrendId:draft.linkedTrend||null,beatSignatures:plan.signatures};
+      state.selectedShot=state.shots[0]?.id||null;save();navigate('shots');toast(`分镜已同步：更新 ${plan.changed} 个节点，保留 ${plan.retained} 个原镜头${plan.locked?'；'+plan.locked+' 个锁定节点需解锁后更新':''}。`);return;
     }
     const target=event.target.closest('[data-v02]');if(!target)return;
     event.preventDefault();event.stopImmediatePropagation();
@@ -411,11 +445,24 @@
       }
     }
   },true);
+  document.addEventListener('input',event=>{
+    const target=event.target;if(!target?.dataset.variantField)return;
+    const item=state.v02.variants?.[target.dataset.variantKey]?.[Number(target.dataset.variantIndex)];
+    if(item&&['title','hook','outline','ending'].includes(target.dataset.variantField)){
+      item[target.dataset.variantField]=target.value;save();
+    }
+  });
   document.addEventListener('change',event=>{
     const target=event.target;
     if(target?.id==='v02-source'){state.v02.selectedProvider=target.value;save()}
     if(target?.id==='v02-script-duration'){state.v02.duration=Number(target.value)||60;save()}
     if(target?.id==='v02-use-trend'){state.v02.useTrend=target.checked;save()}
+    if(target?.dataset.materialId){
+      const idea=currentIdea();if(!idea)return;
+      const ids=selectedMaterials().map(source=>source.id).filter(id=>id!==target.dataset.materialId);
+      if(target.checked){if(ids.length>=7){target.checked=false;toast('最多选择 7 条参考素材。');return}ids.push(target.dataset.materialId)}
+      state.v02.materialSelection=state.v02.materialSelection||{};state.v02.materialSelection[idea.id]=ids;save();document.querySelectorAll?.("[data-material-count]").forEach(el=>{el.textContent="参考素材（可选）· 已选择 "+ids.length+" 条"});
+    }
   },true);
 
   // Restore the currently open view and asynchronously rehydrate DB-backed trends.

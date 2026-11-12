@@ -60,3 +60,5 @@
 .experience-step span{font-size:11px;color:#a6b5c9}
 .experience-step.selected{border-color:#b5d768;background:#253220}
 @media(max-width:800px){.experience-steps{grid-template-columns:repeat(2,minmax(0,1fr))}.experience-feedback{padding:10px 14px;flex-wrap:wrap}}
+
+.material-choice{display:flex;align-items:center;gap:8px;margin:8px 0;overflow-wrap:anywhere}.v02-result textarea{line-height:1.6}.v02-result .field{margin-top:12px} [data-shot-field]:disabled{opacity:.55;cursor:not-allowed}
