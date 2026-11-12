@@ -17,6 +17,7 @@
       sync.title = '数据只保存在当前浏览器，请通过导出项目备份';
     }
     const root = document.getElementById('root');
+    root.insertAdjacentHTML('afterbegin', '<div class="panel" style="margin-bottom:18px"><h2>需要真实采集？</h2><p class="small muted">云端工作台已接通公开抖音话题榜单和网页素材采集，使用飞书账号登录。</p><a class="btn primary" href="https://shengshu.feishuapp.com/app/app_17hxdqcee1y" target="_blank" rel="noopener noreferrer">进入真实采集版 FRAMEFLOW →</a></div>');
     root.insertAdjacentHTML('afterbegin', '<div class="model-note" style="margin-bottom:22px"><b>FRAMEFLOW · 公开演示版</b><br>灵感、素材、剧本和分镜自动保存在当前浏览器。可导出 JSON 备份；AI 与实时采集尚未在此版本启用。</div>');
     for (const button of document.querySelectorAll(disabledSelector)) {
       button.disabled = true;
